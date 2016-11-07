@@ -2,6 +2,30 @@
 #include "MicRecorder.h"
 #include <sstream>
 
+struct RIFF_HEADER {
+	char szRiffID[4];
+	DWORD dwRiffSize;
+	char szRiffFormat[4];
+};
+struct WAVE_FORMAT
+{
+	WORD    wFormatTag;        /* format type */
+	WORD    nChannels;         /* number of channels (i.e. mono, stereo...) */
+	DWORD   nSamplesPerSec;    /* sample rate */
+	DWORD   nAvgBytesPerSec;   /* for buffer estimation */
+	WORD    nBlockAlign;       /* block size of data */
+	WORD    wBitsPerSample;    /* Number of bits per sample of mono data */
+};
+struct FMT_BLOCK {
+	char  szFmtID[4]; 
+	DWORD  dwFmtSize;
+	WAVE_FORMAT wavFormat;
+};
+struct DATA_BLOCK {
+	char  szDataID[4];
+	DWORD  dwDataSize;
+};
+
 MicRecorder::MicRecorder(const WavFormat & format, int DeviceIndex):
 format(format)                  ,
 wavformat(wavformatInit(format)),
@@ -31,33 +55,35 @@ void MicRecorder::Start(const std::wstring & FilePath)
     if (recorderStaus::Stoped != status) {
         throw std::runtime_error("MicRecorder is running");
     }
-    //open_input_device
-    mmErrorThrow(waveInOpen(&hwi                 ,
-                            DeviceIndex          ,
-                            &wavformat           ,
-                            (DWORD_PTR)waveInProc,
-                            (DWORD_PTR)this      ,
-                            CALLBACK_FUNCTION | WAVE_FORMAT_DIRECT));
+	//CreateFile
+	m_hfile = ::CreateFileW(FilePath.c_str()			,
+							GENERIC_READ | GENERIC_WRITE,
+							FILE_SHARE_READ				,
+							NULL						,
+							CREATE_NEW					,
+							FILE_ATTRIBUTE_NORMAL		,
+							NULL);
+	if (INVALID_HANDLE_VALUE == m_hfile) {
+		Win32ErrorThrow();
+	}
 
-   //CreateFile
-    m_hfile = ::CreateFileW(FilePath.c_str()            ,
-                            GENERIC_READ | GENERIC_WRITE,
-                            FILE_SHARE_READ             ,
-                            NULL                        ,
-                            CREATE_NEW                  ,
-                            FILE_ATTRIBUTE_NORMAL       ,
-                            NULL);
-    if (INVALID_HANDLE_VALUE == m_hfile) {
-        auto err = GetLastError();
-        waveInClose(hwi);
-        Win32ErrorThrow(err);
-    }
+    //open_input_device
+	auto r = waveInOpen(&hwi,
+                        DeviceIndex          ,
+                        &wavformat           ,
+                        (DWORD_PTR)waveInProc,
+                        (DWORD_PTR)this      ,
+                        CALLBACK_FUNCTION | WAVE_FORMAT_DIRECT);
+	if (MMSYSERR_NOERROR != r) {
+		CloseHandle(m_hfile);
+		mmErrorThrow(r);
+	}
 
     //initRecordBuffer
     SecondHDR.lpData = seconebuf.get();
     MainHDR.lpData = mainbuf.get();
     MainHDR.dwBufferLength = SecondHDR.dwBufferLength = BufferSize();
-    auto r = waveInPrepareHeader(hwi, &MainHDR, sizeof(WAVEHDR));
+    waveInPrepareHeader(hwi, &MainHDR, sizeof(WAVEHDR));
     if (MMSYSERR_NOERROR != r) {
         waveInClose(hwi);
         CloseHandle(m_hfile);
@@ -207,49 +233,35 @@ void MicRecorder::WriteWavFile(void * buf, DWORD data_len)
     }
 }
 
-DWORD FCC(LPSTR lpStr)
-{
-    DWORD Number = lpStr[0] + lpStr[1] * 0x100 + lpStr[2] * 0x10000 + lpStr[3] * 0x1000000;
-    return Number;
-}
-
 void MicRecorder::WriteHead()
 {
-    DWORD NumToWrite = 0;
-    DWORD dwNumber = 0;
+	//init RIFF_HEADER
+	RIFF_HEADER m_riff = { 0 };;
+	memcpy(m_riff.szRiffID, "RIFF", 4);
+	memcpy(m_riff.szRiffFormat, "WAVE", 4);
 
-    dwNumber = FCC("RIFF");
-    WriteWavFile(&dwNumber, 4);
+	//init FMT_BLOCK
+	FMT_BLOCK m_fmt = { 0 };
+	memcpy(m_fmt.szFmtID, "fmt ", 4);
+	m_fmt.dwFmtSize = sizeof(WAVE_FORMAT);
+	m_fmt.wavFormat = *(WAVE_FORMAT*)&wavformat;
 
-    char temp[4] = { 0 };
-    WriteWavFile(temp, 4);
+	//init Data
+	DATA_BLOCK m_data = { 0 };
+	memcpy(m_data.szDataID, "data", 4);
 
-    dwNumber = FCC("WAVE");
-    WriteWavFile(&dwNumber,4);
-
-    dwNumber = FCC("fmt ");
-    WriteWavFile(&dwNumber, 4);
-
-    dwNumber = 18L;
-    WriteWavFile(&dwNumber, 4);
-
-    WriteWavFile(&wavformat, sizeof(WAVEFORMATEX));
-
-    dwNumber = FCC("data");
-    WriteWavFile(&dwNumber, 4);
-
-    WriteWavFile(temp, 4);
+	WriteWavFile(&m_riff, sizeof(RIFF_HEADER));
+	WriteWavFile(&m_fmt, sizeof(FMT_BLOCK));
+	WriteWavFile(&m_data, sizeof(DATA_BLOCK));
 }
 
 void MicRecorder::WriteEnd(DWORD TotalBytes)
 {
-    DWORD NumToWrite = 0;
-    //4
-    DWORD data = 18 + 20 + TotalBytes;
-    SetFilePointer(m_hfile, 4, NULL, FILE_BEGIN);
+	DWORD data = 4 + sizeof(FMT_BLOCK) + sizeof(DATA_BLOCK);
+	SetFilePointer(m_hfile, sizeof(char[4]), NULL, FILE_BEGIN);
     WriteWavFile(&data,4);
-    //24
-    SetFilePointer(m_hfile, 24, NULL, FILE_BEGIN);
+
+	SetFilePointer(m_hfile, sizeof(RIFF_HEADER) + sizeof(FMT_BLOCK) + sizeof(char[4]), NULL, FILE_BEGIN);
     WriteWavFile(&TotalBytes, 4);
 }
 

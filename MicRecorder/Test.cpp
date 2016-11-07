@@ -11,13 +11,15 @@
 #pragma comment(lib,"winmm.lib")
 
 int main() {
-    DeleteFileW(L"c:\\temp\\123.wav");
+    //DeleteFileW(L"c:\\temp\\123.wav");
 	MicRecorder *recoder = new MicRecorder;
     try {
         recoder->Start(L"c:\\temp\\123.wav");
+		auto s = time(NULL);
         auto a = 0;
         std::cin >> a;
         recoder->Stop();
+		std::cout << time(NULL) - s << std::endl;
         delete recoder;
     }
     catch (std::exception &e) {

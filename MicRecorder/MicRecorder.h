@@ -5,6 +5,9 @@
 #include<mutex>
 #include <deque>
 #include <atomic>
+#include <memory>
+#include <thread>
+#include <condition_variable>
 
 class WavFormat{
 public:
