@@ -11,10 +11,10 @@
 #pragma comment(lib,"winmm.lib")
 
 int main() {
-    //DeleteFileW(L"c:\\temp\\123.wav");
-	MicRecorder *recoder = new MicRecorder;
+    DeleteFileW(L"c:\\temp\\111.wav");
     try {
-        recoder->Start(L"c:\\temp\\123.wav");
+		MicRecorder *recoder = new MicRecorder;
+        recoder->Start(L"c:\\temp\\111.wav");
 		auto s = time(NULL);
         auto a = 0;
         std::cin >> a;
@@ -27,8 +27,6 @@ int main() {
     }
 	std::vector<std::wstring> devs;
     MicRecorder::EnumDevices(devs);
+	system("pause");
     return 0;
 }
-
-
-

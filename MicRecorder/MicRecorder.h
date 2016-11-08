@@ -21,7 +21,7 @@ public:
 		static std::once_flag flag;
 		std::call_once(flag, [] {
 			default.BitsPerSample = 16;
-			default.Channels = 1;
+			default.Channels = 2;
 			default.SampleRate = 44100;
 		});
 		return default;
@@ -50,6 +50,7 @@ public:
 	MicRecorder(const WavFormat &format) : MicRecorder(format, WAVE_MAPPER) {}
 	MicRecorder() : MicRecorder(WavFormat::Default()) {};
     MicRecorder(int DeviceIndex) : MicRecorder(WavFormat::Default(), DeviceIndex) {};
+	MicRecorder(const MicRecorder&) = delete;
     ~MicRecorder();
     void Start(const std::wstring &FilePath);
     void Stop();

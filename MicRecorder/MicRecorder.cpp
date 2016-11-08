@@ -1,30 +1,6 @@
 #include "stdafx.h"
 #include "MicRecorder.h"
-#include <sstream>
-
-struct RIFF_HEADER {
-	char szRiffID[4];
-	DWORD dwRiffSize;
-	char szRiffFormat[4];
-};
-struct WAVE_FORMAT
-{
-	WORD    wFormatTag;        /* format type */
-	WORD    nChannels;         /* number of channels (i.e. mono, stereo...) */
-	DWORD   nSamplesPerSec;    /* sample rate */
-	DWORD   nAvgBytesPerSec;   /* for buffer estimation */
-	WORD    nBlockAlign;       /* block size of data */
-	WORD    wBitsPerSample;    /* Number of bits per sample of mono data */
-};
-struct FMT_BLOCK {
-	char  szFmtID[4]; 
-	DWORD  dwFmtSize;
-	WAVE_FORMAT wavFormat;
-};
-struct DATA_BLOCK {
-	char  szDataID[4];
-	DWORD  dwDataSize;
-};
+#include "WaveHeader.h"
 
 MicRecorder::MicRecorder(const WavFormat & format, int DeviceIndex):
 format(format)                  ,
@@ -182,12 +158,13 @@ void MicRecorder::WriterProc()
         }
         if (WokerSingle::Stop == message.single) {
             WriteWavFile(buf.get(), bufferwritren);
-            WriteEnd(len_recorded);
+			WriteEnd(len_recorded);
             singles.clear();
             return;
         } else if (WokerSingle::Open == message.single) {
             WriteHead();
         } else if(WokerSingle::Write == message.single){
+			len_recorded += message.dwLength;
             if (bufferwritren + message.dwLength < BufferSize) {
                 memcpy(buf.get() + bufferwritren, message.buf.get(), message.dwLength);
                 bufferwritren += message.dwLength;
@@ -257,7 +234,7 @@ void MicRecorder::WriteHead()
 
 void MicRecorder::WriteEnd(DWORD TotalBytes)
 {
-	DWORD data = 4 + sizeof(FMT_BLOCK) + sizeof(DATA_BLOCK);
+	DWORD data = 4 + sizeof(FMT_BLOCK) + sizeof(DATA_BLOCK) + TotalBytes;
 	SetFilePointer(m_hfile, sizeof(char[4]), NULL, FILE_BEGIN);
     WriteWavFile(&data,4);
 
