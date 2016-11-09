@@ -4,31 +4,63 @@
 #include "stdafx.h"
 #include <string>
 #include <iostream>
-#include <Windows.h>
-#include <sstream>
 #include "MicRecorder.h"
-
-#pragma comment(lib,"winmm.lib")
+#include "WaveFilePlayer.h"
 
 int main() {
-    //DeleteFileW(L"c:\\temp\\123.wav");
-	MicRecorder *recoder = new MicRecorder;
-    try {
-        recoder->Start(L"c:\\temp\\123.wav");
-		auto s = time(NULL);
-        auto a = 0;
-        std::cin >> a;
-        recoder->Stop();
-		std::cout << time(NULL) - s << std::endl;
-        delete recoder;
+	WaveFilePlayer p(GetConsoleWindow());
+    MicRecorder r;
+    
+    std::string command;
+    while (true)
+    {
+        std::cout << "input q:quit" << std::endl
+                  << "input record:begin record" << std::endl
+                  << "input stoprecord: stop srop record" << std::endl
+                  << "input load: load wav file" << std::endl
+                  << "input detach: detach loaded wav file" << std::endl
+                  << "input play: paly loaded wav file" << std::endl
+                  << "input stop: stop wav file" << std::endl
+                  << "input pause : pause wav file play" << std::endl;
+        std::cin >> command;
+        try {
+            if ("q" == command) {
+                return 0;
+            }
+            if ("record" == command) {
+                std::cout << "input record file path" << std::endl;
+                std::wstring file;
+                std::wcin >> file;
+                r.Start(file);
+            }
+            if ("stoprecord" == command) {
+                r.Stop();
+            }
+            if ("load" == command) {
+                std::cout << "input wav file path" << std::endl;
+                std::wstring file;
+                std::wcin >> file;
+                p.Load_file(file);
+            }
+            if ("play" == command) {
+                p.Play();
+            }
+            if ("stop" == command) {
+                p.Stop();
+            }
+            if ("pause" == command) {
+                p.Pause();
+            }
+            if ("detach" == command) {
+                p.Detach_file();
+            }
+        }
+        catch (std::exception e) {
+            std::cout << e.what() << std::endl;
+            system("pause");
+        }
+        system("cls");
     }
-    catch (std::exception &e) {
-        std::cout << e.what();
-    }
-	std::vector<std::wstring> devs;
-    MicRecorder::EnumDevices(devs);
+	system("pause");
     return 0;
 }
-
-
-

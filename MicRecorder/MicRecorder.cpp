@@ -1,30 +1,9 @@
 #include "stdafx.h"
 #include "MicRecorder.h"
-#include <sstream>
+#include "WaveHeader.h"
+#include "RuntimeException.h"
 
-struct RIFF_HEADER {
-	char szRiffID[4];
-	DWORD dwRiffSize;
-	char szRiffFormat[4];
-};
-struct WAVE_FORMAT
-{
-	WORD    wFormatTag;        /* format type */
-	WORD    nChannels;         /* number of channels (i.e. mono, stereo...) */
-	DWORD   nSamplesPerSec;    /* sample rate */
-	DWORD   nAvgBytesPerSec;   /* for buffer estimation */
-	WORD    nBlockAlign;       /* block size of data */
-	WORD    wBitsPerSample;    /* Number of bits per sample of mono data */
-};
-struct FMT_BLOCK {
-	char  szFmtID[4]; 
-	DWORD  dwFmtSize;
-	WAVE_FORMAT wavFormat;
-};
-struct DATA_BLOCK {
-	char  szDataID[4];
-	DWORD  dwDataSize;
-};
+#pragma comment(lib,"winmm.lib")
 
 MicRecorder::MicRecorder(const WavFormat & format, int DeviceIndex):
 format(format)                  ,
@@ -64,7 +43,7 @@ void MicRecorder::Start(const std::wstring & FilePath)
 							FILE_ATTRIBUTE_NORMAL		,
 							NULL);
 	if (INVALID_HANDLE_VALUE == m_hfile) {
-		Win32ErrorThrow();
+		RuntimeException::Win32ErrorThrow();
 	}
 
     //open_input_device
@@ -76,7 +55,7 @@ void MicRecorder::Start(const std::wstring & FilePath)
                         CALLBACK_FUNCTION | WAVE_FORMAT_DIRECT);
 	if (MMSYSERR_NOERROR != r) {
 		CloseHandle(m_hfile);
-		mmErrorThrow(r);
+		RuntimeException::mmErrorThrow(r);
 	}
 
     //initRecordBuffer
@@ -87,14 +66,14 @@ void MicRecorder::Start(const std::wstring & FilePath)
     if (MMSYSERR_NOERROR != r) {
         waveInClose(hwi);
         CloseHandle(m_hfile);
-        mmErrorThrow(r);
+		RuntimeException::mmErrorThrow(r);
     }
     r = waveInPrepareHeader(hwi, &SecondHDR, sizeof(WAVEHDR));
     if (MMSYSERR_NOERROR != r) {
         waveInUnprepareHeader(hwi, &MainHDR, sizeof(WAVEHDR));
         waveInClose(hwi);
         CloseHandle(m_hfile);
-        mmErrorThrow(r);
+		RuntimeException::mmErrorThrow(r);
     }
 
     //Begin Record
@@ -110,7 +89,7 @@ void MicRecorder::Start(const std::wstring & FilePath)
             waveInUnprepareHeader(hwi, &SecondHDR, sizeof(WAVEHDR));
             waveInClose(hwi);
             CloseHandle(m_hfile);
-            mmErrorThrow(r);
+			RuntimeException::mmErrorThrow(r);
         }
     }
     status = recorderStaus::Recording;
@@ -182,12 +161,13 @@ void MicRecorder::WriterProc()
         }
         if (WokerSingle::Stop == message.single) {
             WriteWavFile(buf.get(), bufferwritren);
-            WriteEnd(len_recorded);
+			WriteEnd(len_recorded);
             singles.clear();
             return;
         } else if (WokerSingle::Open == message.single) {
             WriteHead();
         } else if(WokerSingle::Write == message.single){
+			len_recorded += message.dwLength;
             if (bufferwritren + message.dwLength < BufferSize) {
                 memcpy(buf.get() + bufferwritren, message.buf.get(), message.dwLength);
                 bufferwritren += message.dwLength;
@@ -257,7 +237,7 @@ void MicRecorder::WriteHead()
 
 void MicRecorder::WriteEnd(DWORD TotalBytes)
 {
-	DWORD data = 4 + sizeof(FMT_BLOCK) + sizeof(DATA_BLOCK);
+	DWORD data = 4 + sizeof(FMT_BLOCK) + sizeof(DATA_BLOCK) + TotalBytes;
 	SetFilePointer(m_hfile, sizeof(char[4]), NULL, FILE_BEGIN);
     WriteWavFile(&data,4);
 
@@ -292,36 +272,4 @@ void MicRecorder::waveInProc(HWAVEIN hwi, UINT uMsg, DWORD_PTR dwInstance, DWORD
         waveInAddBuffer(hwi, pWaveHeader, sizeof(WAVEHDR));
         self->PostSingle(message);
     }
-}
-
-void MicRecorder::mmErrorThrow(MMRESULT result)
-{
-    if (MMSYSERR_NOERROR != result) {
-        char buf[1 << 10];
-        if (MMSYSERR_NOERROR == waveInGetErrorTextA(result, buf, 1 << 10)) {
-            throw new std::runtime_error(buf);
-        }
-        throw std::runtime_error("unknow error");
-    }
-}
-
-void MicRecorder::Win32ErrorThrow(DWORD dw)
-{
-    LPVOID lpMsgBuf;
-    if (dw == 0) {
-        return;
-    }
-    if (!FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-                        NULL                                                       ,
-                        dw                                                         ,
-                        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT)                  ,
-                        (LPSTR)&lpMsgBuf                                           ,
-                        0                                                          ,
-                        NULL)) 
-    {
-        throw std::runtime_error("unkbow error");
-    }
-    std::string err((char *)lpMsgBuf);
-    LocalFree(lpMsgBuf);
-    throw std::runtime_error(err);
 }
