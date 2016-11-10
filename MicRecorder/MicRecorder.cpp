@@ -26,74 +26,100 @@ MicRecorder::~MicRecorder()
         stop();
     }
 }
+void MicRecorder::start(HANDLE h_file) {
+	::SetFilePointer(h_file, 0, 0, FILE_BEGIN);
+	RuntimeException::Win32ErrorThrow();
+	::SetEndOfFile(h_file);
+	m_hfile = h_file;
 
+	//open_input_device
+	auto r = waveInOpen(&hwi,
+						DeviceIndex,
+						&wavformat,
+						(DWORD_PTR)waveInProc,
+						(DWORD_PTR)this,
+						CALLBACK_FUNCTION | WAVE_FORMAT_DIRECT);
+
+	if (MMSYSERR_NOERROR != r) {
+		if (stop_close) {
+			CloseHandle(m_hfile);
+		}
+		RuntimeException::mmErrorThrow(r);
+	}
+
+	//initRecordBuffer
+	SecondHDR.lpData = seconebuf.get();
+	MainHDR.lpData = mainbuf.get();
+	MainHDR.dwBufferLength = SecondHDR.dwBufferLength = BufferSize();
+	waveInPrepareHeader(hwi, &MainHDR, sizeof(WAVEHDR));
+	if (MMSYSERR_NOERROR != r) {
+		waveInClose(hwi);
+		if (stop_close) {
+			CloseHandle(m_hfile);
+		}
+		RuntimeException::mmErrorThrow(r);
+	}
+	r = waveInPrepareHeader(hwi, &SecondHDR, sizeof(WAVEHDR));
+	if (MMSYSERR_NOERROR != r) {
+		waveInUnprepareHeader(hwi, &MainHDR, sizeof(WAVEHDR));
+		waveInClose(hwi);
+		if (stop_close) {
+			CloseHandle(m_hfile);
+		}
+		RuntimeException::mmErrorThrow(r);
+	}
+
+	//Begin Record
+	for (auto &i : std::vector<std::function<MMRESULT(void)>>
+	{
+		[this]()->MMRESULT {return waveInAddBuffer(hwi, &MainHDR, sizeof(WAVEHDR)); },
+		[this]()->MMRESULT {return waveInAddBuffer(hwi, &SecondHDR, sizeof(WAVEHDR)); },
+		[this]()->MMRESULT {return waveInStart(hwi); }
+	}) 
+	{
+		if (r = i(), MMSYSERR_NOERROR != r) {
+			waveInUnprepareHeader(hwi, &MainHDR, sizeof(WAVEHDR));
+			waveInUnprepareHeader(hwi, &SecondHDR, sizeof(WAVEHDR));
+			waveInClose(hwi);
+			if (stop_close) {
+				CloseHandle(m_hfile);
+			}
+			RuntimeException::mmErrorThrow(r);
+		}
+	}
+	fileWriter = std::thread([this] {WriterProc(); });
+	status = recorderStaus::Recording;
+	return;
+
+}
+
+void MicRecorder::Start(HANDLE h_file) {
+	std::unique_lock<std::mutex> lock(StausLock);
+	if (recorderStaus::Stoped != status) {
+		throw std::runtime_error("MicRecorder is running");
+	}
+	stop_close = false;
+	start(h_file);
+}
 void MicRecorder::Start(const std::wstring & FilePath)
 {
     std::unique_lock<std::mutex> lock(StausLock);
-    fileWriter = std::thread([this] {WriterProc(); });
     if (recorderStaus::Stoped != status) {
         throw std::runtime_error("MicRecorder is running");
     }
 	//CreateFile
-	m_hfile = ::CreateFileW(FilePath.c_str()			,
-							GENERIC_READ | GENERIC_WRITE,
-							FILE_SHARE_READ				,
-							NULL						,
-							CREATE_NEW					,
-							FILE_ATTRIBUTE_NORMAL		,
-							NULL);
-	if (INVALID_HANDLE_VALUE == m_hfile) {
+	auto h_file = ::CreateFileW(FilePath.c_str()			,
+								GENERIC_READ | GENERIC_WRITE,
+								FILE_SHARE_READ				,
+								NULL						,
+								CREATE_NEW					,
+								FILE_ATTRIBUTE_NORMAL		,
+								NULL);
+	if (INVALID_HANDLE_VALUE == h_file) {
 		RuntimeException::Win32ErrorThrow();
 	}
-
-    //open_input_device
-	auto r = waveInOpen(&hwi,
-                        DeviceIndex          ,
-                        &wavformat           ,
-                        (DWORD_PTR)waveInProc,
-                        (DWORD_PTR)this      ,
-                        CALLBACK_FUNCTION | WAVE_FORMAT_DIRECT);
-	if (MMSYSERR_NOERROR != r) {
-		CloseHandle(m_hfile);
-		RuntimeException::mmErrorThrow(r);
-	}
-
-    //initRecordBuffer
-    SecondHDR.lpData = seconebuf.get();
-    MainHDR.lpData = mainbuf.get();
-    MainHDR.dwBufferLength = SecondHDR.dwBufferLength = BufferSize();
-    waveInPrepareHeader(hwi, &MainHDR, sizeof(WAVEHDR));
-    if (MMSYSERR_NOERROR != r) {
-        waveInClose(hwi);
-        CloseHandle(m_hfile);
-		RuntimeException::mmErrorThrow(r);
-    }
-    r = waveInPrepareHeader(hwi, &SecondHDR, sizeof(WAVEHDR));
-    if (MMSYSERR_NOERROR != r) {
-        waveInUnprepareHeader(hwi, &MainHDR, sizeof(WAVEHDR));
-        waveInClose(hwi);
-        CloseHandle(m_hfile);
-		RuntimeException::mmErrorThrow(r);
-    }
-
-    //Begin Record
-    for(auto &i : std::vector<std::function<MMRESULT(void)>>
-    {
-        [this]()->MMRESULT {return waveInAddBuffer(hwi, &MainHDR, sizeof(WAVEHDR)); },
-        [this]()->MMRESULT {return waveInAddBuffer(hwi, &SecondHDR, sizeof(WAVEHDR)); },
-        [this]()->MMRESULT {return waveInStart(hwi); }
-    }) 
-    {
-        if (r = i(),MMSYSERR_NOERROR != r) {
-            waveInUnprepareHeader(hwi, &MainHDR, sizeof(WAVEHDR));
-            waveInUnprepareHeader(hwi, &SecondHDR, sizeof(WAVEHDR));
-            waveInClose(hwi);
-            CloseHandle(m_hfile);
-			RuntimeException::mmErrorThrow(r);
-        }
-    }
-    status = recorderStaus::Recording;
-    return;
+	stop_close = true;
+	start(h_file);
 }
 
 void MicRecorder::Stop()
@@ -136,7 +162,9 @@ void MicRecorder::stop()
     r = waveInUnprepareHeader(hwi, &MainHDR, sizeof(WAVEHDR));
     r = waveInClose(hwi);
     
-    CloseHandle(m_hfile);
+	if (stop_close) {
+		CloseHandle(m_hfile);
+	}
     stopping = false;
 }
 

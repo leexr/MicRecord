@@ -3,13 +3,24 @@
 #include "WaveHeader.h"
 #include "RuntimeException.h"
 #include "WaveHeader.h"
+#include <math.h>
+#include <sstream>
 
 #pragma comment(lib,"Dsound.lib")
 #pragma comment(lib,"dxguid.lib")
 
-WaveFilePlayer::WaveFilePlayer(HWND hwnd) 
-:m_hwnd(hwnd) ,
+#ifndef TRACE
+	#ifdef _DEBUG  
+		#define TRACE printf  
+	#else  
+		#define TRACE  
+	#endif
+#endif
+
+WaveFilePlayer::WaveFilePlayer(HWND hwnd):
+m_hwnd(hwnd)  ,
 waiting(false),
+_volume(100)  ,
 status(PlayerStatus::Normal)
 {
 	if (DS_OK != DirectSoundCreate8(NULL, &m_Player, NULL)) {
@@ -31,6 +42,16 @@ status(PlayerStatus::Normal)
             RuntimeException::Win32ErrorThrow();
         }
     }
+}
+
+LONG WaveFilePlayer::volume() {
+	if (_volume <= 0) {
+		return -10000;
+	}
+	if (_volume >= 100) {
+		return 0;
+	}
+	return (LONG)(20.0 * log10((double)_volume / 100.0) * 100);
 }
 
 WaveFilePlayer::~WaveFilePlayer() {
@@ -58,25 +79,40 @@ void ReadWavFile(HANDLE file, void *buf, DWORD len) {
 	}
 }
 
-void WaveFilePlayer::Load_file(const std::wstring &FilePath) {
+void WaveFilePlayer::Load_fileByPath(const std::wstring &FilePath) {
     std::unique_lock<std::mutex> lock(lock_status);
     if (PlayerStatus::Normal != status) {
         throw std::runtime_error("palyer has already loaded file,must detch frist");
     }
-	m_hfile = CreateFileW(FilePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, NULL, NULL);
+	HANDLE h_file = CreateFileW(FilePath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, NULL, NULL);
     RuntimeException::Win32ErrorThrow();
+	Detach_Close = true;
+	load_file(h_file);
 
-    ParseWavformat();
+}
+
+void WaveFilePlayer::Load_file(HANDLE h_file) {
+	std::unique_lock<std::mutex> lock(lock_status);
+	if (PlayerStatus::Normal != status) {
+		throw std::runtime_error("palyer has already loaded file,must detch frist");
+	}
+	Detach_Close = false;
+	load_file(h_file);
+}
+
+void WaveFilePlayer::load_file(HANDLE h_file) {
+	m_hfile = h_file;
+	ParseWavformat();
 	DWORD BufferSize = m_format.nSamplesPerSec * 0.5 * m_format.wBitsPerSample / 8;
 
-	m_dsbd.dwFlags = DSBCAPS_GLOBALFOCUS | DSBCAPS_CTRLPOSITIONNOTIFY | DSBCAPS_GETCURRENTPOSITION2;
+	m_dsbd.dwFlags = DSBCAPS_GLOBALFOCUS | DSBCAPS_CTRLPOSITIONNOTIFY | DSBCAPS_GETCURRENTPOSITION2 | DSBCAPS_CTRLVOLUME;
 	m_dsbd.dwBufferBytes = WaveFilePlayerBufferCount * BufferSize;
 	m_dsbd.dwSize = sizeof(DSBUFFERDESC);
 	m_dsbd.lpwfxFormat = &m_format;
 
 
 	if (FAILED(m_Player->CreateSoundBuffer(&m_dsbd, &m_pDSBuffer, NULL))) {
-		::CloseHandle(m_hfile);
+		if (Detach_Close) { ::CloseHandle(m_hfile); }
 		throw std::runtime_error("Create SoundBuffer Error");
 	}
 	if (FAILED(m_pDSBuffer->QueryInterface(IID_IDirectSoundBuffer8, (LPVOID*)&m_pDSBuffer8))) {
@@ -84,29 +120,33 @@ void WaveFilePlayer::Load_file(const std::wstring &FilePath) {
 		m_pDSBuffer->Release();
 		throw std::runtime_error("Create SoundBuffer Manager Error");
 	}
-	//Get IDirectSoundNotify8  
-    IDirectSoundNotify8 *m_pDSNotify;
-    if (FAILED(m_pDSBuffer8->QueryInterface(IID_IDirectSoundNotify, (LPVOID*)&m_pDSNotify))) {
-        ::CloseHandle(m_hfile);
-        m_pDSBuffer->Release();
-        m_pDSBuffer8->Release();
-        throw std::runtime_error("Create SoundNotify Error");
-    }
-    for (int i = 0; i != WaveFilePlayerBufferCount; ++i) {
-        m_pDSPosNotify[i].dwOffset = i * BufferSize;
-    }
+	if (FAILED(m_pDSBuffer8->SetVolume(volume()))) {
+		//todo
+	}
 
-    if (FAILED(m_pDSNotify->SetNotificationPositions(WaveFilePlayerBufferCount, m_pDSPosNotify))){
-        m_pDSNotify->Release();
-        ::CloseHandle(m_hfile);
-        m_pDSBuffer->Release();
-        m_pDSBuffer8->Release();
-        throw std::runtime_error("SetNotificationPositions Error");
-    }
+	//Get IDirectSoundNotify8  
+	IDirectSoundNotify8 *m_pDSNotify;
+	if (FAILED(m_pDSBuffer8->QueryInterface(IID_IDirectSoundNotify, (LPVOID*)&m_pDSNotify))) {
+		if (Detach_Close) { ::CloseHandle(m_hfile); }
+		m_pDSBuffer->Release();
+		m_pDSBuffer8->Release();
+		throw std::runtime_error("Create SoundNotify Error");
+	}
+	for (int i = 0; i != WaveFilePlayerBufferCount; ++i) {
+		m_pDSPosNotify[i].dwOffset = i * BufferSize;
+	}
+
+	if (FAILED(m_pDSNotify->SetNotificationPositions(WaveFilePlayerBufferCount, m_pDSPosNotify))) {
+		m_pDSNotify->Release();
+		if (Detach_Close) { ::CloseHandle(m_hfile); }
+		m_pDSBuffer->Release();
+		m_pDSBuffer8->Release();
+		throw std::runtime_error("SetNotificationPositions Error");
+	}
 	waiting = true;
-    BufferTransfer = std::thread([this, BufferSize] {TransferProc(BufferSize ); });
-    m_pDSNotify->Release();
-    status = PlayerStatus::LoadFile;
+	BufferTransfer = std::thread([this, BufferSize] {TransferProc(BufferSize); });
+	m_pDSNotify->Release();
+	status = PlayerStatus::LoadFile;
 }
 
 void WaveFilePlayer::Detach_file() {
@@ -126,26 +166,42 @@ void WaveFilePlayer::Detach_file() {
 bool WaveFilePlayer::Play()
 {
 	std::unique_lock<std::mutex>(lock_status);
-    if (status == PlayerStatus::LoadFile) {
-		pcm_offset = 0;
-		m_pDSBuffer8->SetCurrentPosition(0);
-		m_pDSBuffer8->Play(0, 0, DSBPLAY_LOOPING);
-		status = PlayerStatus::Playing;
-		return true;
-    }
-	if (status == PlayerStatus::Pause) {
-		m_pDSBuffer8->SetCurrentPosition(0);
+	if (status == PlayerStatus::Pause || status == PlayerStatus::LoadFile) {
 		m_pDSBuffer8->Play(0, 0, DSBPLAY_LOOPING);
 		status = PlayerStatus::Playing;
 		return true;
 	}
     return false;
 }
+PlayerStatus WaveFilePlayer::Status() {
+	std::unique_lock<std::mutex>(lock_status);
+	return status;
+}
+
+bool WaveFilePlayer::SetVolume(short volume) {
+	std::unique_lock<std::mutex>(lock_status);
+	_volume = volume;
+	if (status != PlayerStatus::Normal) {
+		auto v = -this->volume();
+		if (FAILED(m_pDSBuffer8->SetVolume(-v))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+long WaveFilePlayer::WaveDuration() const {
+	std::unique_lock<std::mutex>(lock_status);
+	if (status == PlayerStatus::Normal) {
+		throw std::runtime_error("must load wav file frist");
+	}
+	return Data_length / m_format.nAvgBytesPerSec * 1000;
+}
 
 bool WaveFilePlayer::Pause() {
 	std::unique_lock<std::mutex>(lock_status);
 	if (status == PlayerStatus::Playing) {
-		auto r = m_pDSBuffer8->Stop();
+		m_pDSBuffer8->Stop();
 		status = PlayerStatus::Pause;
 		return true;
 	}
@@ -172,7 +228,10 @@ void WaveFilePlayer::detach_File() {
 	waiting = false;
 
     BufferTransfer.join();
-	::CloseHandle(m_hfile);
+	if (Detach_Close) {
+		::CloseHandle(m_hfile);
+	}
+	
 	
 	m_pDSBuffer8->Release();
 	m_pDSBuffer->Release();
@@ -182,8 +241,11 @@ void WaveFilePlayer::detach_File() {
 
 void WaveFilePlayer::ParseWavformat() {
 	if (INVALID_SET_FILE_POINTER == SetFilePointer(m_hfile, 0, 0, FILE_BEGIN)) {
-		CloseHandle(m_hfile);
-		RuntimeException::Win32ErrorThrow();
+		auto error = ::GetLastError();
+		if (Detach_Close) {
+			::CloseHandle(m_hfile);
+		}
+		RuntimeException::Win32ErrorThrow(error);
 	}
 
 	Data_Begin = 0;
@@ -208,6 +270,13 @@ void WaveFilePlayer::ParseWavformat() {
 		CloseHandle(m_hfile);
 		throw std::runtime_error("invalid fmt block");
 	}
+	if (WAVE_FORMAT_PCM != m_fmt.wavFormat.wFormatTag) {
+		std::ostringstream oss;
+		oss << "unsupport WAVE Format :"
+			<< m_fmt.wavFormat.wFormatTag
+			<< " ,player support WAVE_FORMAT_PCM only";
+		throw std::runtime_error(oss.str());
+	}
 	
 
 	DATA_BLOCK m_data = { 0 };
@@ -217,7 +286,9 @@ void WaveFilePlayer::ParseWavformat() {
 	if (!memcmp(m_data.szDataID, "LIST", 4)) {
 		if (INVALID_SET_FILE_POINTER == SetFilePointer(m_hfile, m_data.dwDataSize, 0, FILE_CURRENT)) {
 			auto error = GetLastError();
-			CloseHandle(m_hfile);
+			if (Detach_Close) {
+				::CloseHandle(m_hfile);
+			}
 			RuntimeException::Win32ErrorThrow(error);
 		}
 		Data_Begin += m_data.dwDataSize;

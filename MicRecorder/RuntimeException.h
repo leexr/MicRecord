@@ -10,7 +10,7 @@ public:
 	static void mmErrorThrow(MMRESULT result) {
 		if (MMSYSERR_NOERROR != result) {
 			char buf[1 << 10];
-			if (MMSYSERR_NOERROR == waveInGetErrorTextA(result, buf, 1 << 10)) {
+			if (MMSYSERR_NOERROR != waveInGetErrorTextA(result, buf, 1 << 10)) {
 				throw new std::runtime_error(buf);
 			}
 			throw std::runtime_error("unknow error");
@@ -23,12 +23,13 @@ public:
 			return;
 		}
 		if (!FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-			NULL,
-			dw,
-			MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-			(LPSTR)&lpMsgBuf,
-			0,
-			NULL)) {
+							NULL													   ,
+							dw                                                         ,
+							MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT)                  ,
+							(LPSTR)&lpMsgBuf                                           ,
+							0                                                          ,
+							NULL)) 
+		{
 			throw std::runtime_error("unkbow error");
 		}
 		std::string err((char *)lpMsgBuf);

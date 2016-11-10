@@ -146,6 +146,7 @@
     <Text Include="ReadMe.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AsyncTask.h" />
     <ClInclude Include="MicRecorder.h" />
     <ClInclude Include="RuntimeException.h" />
     <ClInclude Include="stdafx.h" />
@@ -154,6 +155,7 @@
     <ClInclude Include="WaveHeader.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="AsyncTask.cpp" />
     <ClCompile Include="MicRecorder.cpp" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>

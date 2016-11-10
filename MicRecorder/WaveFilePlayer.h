@@ -17,11 +17,15 @@ class WaveFilePlayer {
 public:
 	WaveFilePlayer(HWND hwnd);
 	virtual ~WaveFilePlayer();
-	void Load_file(const std::wstring &FilePath);
+	void Load_fileByPath(const std::wstring &FilePath);
+	void Load_file(HANDLE h_file);
 	void Detach_file();
     bool Play();
 	bool Stop();
 	bool Pause();
+	bool SetVolume(short volume);
+	PlayerStatus Status();
+	long WaveDuration() const;
 private:
 	HWND m_hwnd;
 	HANDLE m_hfile;
@@ -38,7 +42,11 @@ private:
     PlayerStatus status;
 	DWORD Data_length;
 	DWORD Data_Begin;
+	bool Detach_Close;
+	short _volume;
 private:
+	LONG volume();
+	void load_file(HANDLE h_file);
 	void detach_File();
     void ParseWavformat();
     void TransferProc(int BufferSize);

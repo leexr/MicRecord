@@ -8,6 +8,7 @@
 #include <memory>
 #include <thread>
 #include <condition_variable>
+#include "AsyncTask.h"
 
 class WavFormat{
 public:
@@ -53,6 +54,7 @@ public:
 	MicRecorder(const MicRecorder&) = delete;
     ~MicRecorder();
     void Start(const std::wstring &FilePath);
+	void Start(HANDLE h_file);
     void Stop();
 public:
 	static bool EnumDevices(std::vector<std::wstring> &devs);
@@ -69,6 +71,7 @@ private:
     WAVEHDR MainHDR;
     WAVEHDR SecondHDR;
     long WaveDataLen;
+	bool stop_close;
 
     std::atomic<bool> stopping;
     std::deque<WorkerMessage> singles;
@@ -76,6 +79,7 @@ private:
     std::thread fileWriter;
     std::condition_variable writer_condition;
 private:
+	void start(HANDLE h_file);
     void stop();
     void WriterProc();
     inline int BufferSize() { return (int)format.SampleRate * 0.5 * format.BytesPerSample(); }
