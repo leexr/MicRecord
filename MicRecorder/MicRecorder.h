@@ -39,11 +39,7 @@ enum WokerSingle
     Write,
     Stop
 };
-typedef struct {
-    WokerSingle single;
-    std::shared_ptr<char> buf;
-    int dwLength;
-}WorkerMessage,*pWorkerMessage;
+
 class MicRecorder
 {
 public:
@@ -73,24 +69,12 @@ private:
     long WaveDataLen;
 	bool stop_close;
 
+    std::shared_ptr<AsyncTask> Writer;
     std::atomic<bool> stopping;
-    std::deque<WorkerMessage> singles;
-    std::mutex wokerqueuelock;
-    std::thread fileWriter;
-    std::condition_variable writer_condition;
 private:
 	void start(HANDLE h_file);
     void stop();
-    void WriterProc();
     inline int BufferSize() { return (int)format.SampleRate * 0.5 * format.BytesPerSample(); }
-    inline void PostSingle(WorkerMessage message) {
-        std::unique_lock<std::mutex>(wokerqueuelock);
-        singles.push_back(message);
-        writer_condition.notify_all();
-    }
-    void WriteWavFile(void *buf, DWORD data_len);
-    void WriteHead();
-    void WriteEnd(DWORD TotalBytes);
 private:	
     static void CALLBACK waveInProc(
         HWAVEIN   hwi,

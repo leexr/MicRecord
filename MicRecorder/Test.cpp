@@ -1,17 +1,16 @@
 // Test.cpp : 定义控制台应用程序的入口点。
-//
+
 
 #include "stdafx.h"
 #include <string>
 #include <iostream>
 #include "MicRecorder.h"
 #include "WaveFilePlayer.h"
-
+#include <memory>
 int main() {
 	try {
 		WaveFilePlayer p(GetConsoleWindow());
 		MicRecorder r;
-
 		std::string command;
 		while (true) {
 			std::cout << "input q:quit" << std::endl

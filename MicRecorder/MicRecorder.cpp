@@ -4,6 +4,110 @@
 #include "RuntimeException.h"
 
 #pragma comment(lib,"winmm.lib")
+class AsyncWriter;
+class WriterMessage:public AsyncMessage{
+public:
+    WriterMessage() {};
+    ~WriterMessage() {};
+    friend class MicRecorder;
+    friend class AsyncWriter;
+private:
+    WokerSingle single;
+    std::shared_ptr<char> buf;
+    int dwLength;
+};
+
+class AsyncWriter :public AsyncTask
+{
+public:
+    AsyncWriter(size_t BuferLength, HANDLE h_file,const WAVEFORMATEX& format) 
+    :wavformat(format), m_hfile(h_file), buf(new char[BuferLength]),bufferwritren(0), len_recorded(0),BufferSize(BuferLength)
+    {
+
+    }
+    ~AsyncWriter(){};
+protected:
+    virtual void Process(const AsyncMessage &Message) override {
+        const WriterMessage &message = *(const WriterMessage *)&Message;
+        if (WokerSingle::Stop == message.single) {
+            WriteWavFile(buf.get(), bufferwritren);
+            WriteEnd(len_recorded);
+            return;
+        }
+        else if (WokerSingle::Open == message.single) {
+            WriteHead();
+        }
+        else if (WokerSingle::Write == message.single) {
+            len_recorded += message.dwLength;
+            if (bufferwritren + message.dwLength < BufferSize) {
+                memcpy(buf.get() + bufferwritren, message.buf.get(), message.dwLength);
+                bufferwritren += message.dwLength;
+            }
+            else {
+                auto len_copy = BufferSize - bufferwritren;
+                memcpy(buf.get() + bufferwritren, message.buf.get(), len_copy);
+                WriteWavFile(buf.get(), BufferSize);
+                if (len_copy != message.dwLength) {
+                    bufferwritren = message.dwLength - len_copy;
+                    auto source = message.buf.get() + len_copy;
+                    memcpy(buf.get(), source, bufferwritren);
+                }
+                else {
+                    bufferwritren = 0;
+                }
+            }
+        }
+    }
+private:
+    size_t BufferSize;
+    HANDLE m_hfile;
+    std::shared_ptr<char> buf;
+    const WAVEFORMATEX &wavformat;
+    DWORD bufferwritren;
+    DWORD len_recorded ;
+    void WriteWavFile(void * buf, DWORD data_len)
+    {
+        DWORD written = 0;
+        while (written < data_len)
+        {
+            DWORD _written;
+            if (!::WriteFile(m_hfile, buf, data_len, &_written, NULL)) {
+                break;
+            }
+            written += _written;
+        }
+    }
+    void WriteEnd(DWORD TotalBytes)
+    {
+        DWORD data = 4 + sizeof(FMT_BLOCK) + sizeof(DATA_BLOCK) + TotalBytes;
+        SetFilePointer(m_hfile, sizeof(char[4]), NULL, FILE_BEGIN);
+        WriteWavFile(&data, 4);
+
+        SetFilePointer(m_hfile, sizeof(RIFF_HEADER) + sizeof(FMT_BLOCK) + sizeof(char[4]), NULL, FILE_BEGIN);
+        WriteWavFile(&TotalBytes, 4);
+    }
+    void WriteHead()
+    {
+        //init RIFF_HEADER
+        RIFF_HEADER m_riff = { 0 };;
+        memcpy(m_riff.szRiffID, "RIFF", 4);
+        memcpy(m_riff.szRiffFormat, "WAVE", 4);
+
+        //init FMT_BLOCK
+        FMT_BLOCK m_fmt = { 0 };
+        memcpy(m_fmt.szFmtID, "fmt ", 4);
+        m_fmt.dwFmtSize = sizeof(WAVE_FORMAT);
+        m_fmt.wavFormat = *(WAVE_FORMAT*)&wavformat;
+
+        //init Data
+        DATA_BLOCK m_data = { 0 };
+        memcpy(m_data.szDataID, "data", 4);
+
+        WriteWavFile(&m_riff, sizeof(RIFF_HEADER));
+        WriteWavFile(&m_fmt, sizeof(FMT_BLOCK));
+        WriteWavFile(&m_data, sizeof(DATA_BLOCK));
+    }
+};
 
 MicRecorder::MicRecorder(const WavFormat & format, int DeviceIndex):
 format(format)                  ,
@@ -27,6 +131,7 @@ MicRecorder::~MicRecorder()
     }
 }
 void MicRecorder::start(HANDLE h_file) {
+    Writer = std::make_shared<AsyncWriter>(1 << 20, h_file, wavformat);
 	::SetFilePointer(h_file, 0, 0, FILE_BEGIN);
 	RuntimeException::Win32ErrorThrow();
 	::SetEndOfFile(h_file);
@@ -87,10 +192,9 @@ void MicRecorder::start(HANDLE h_file) {
 			RuntimeException::mmErrorThrow(r);
 		}
 	}
-	fileWriter = std::thread([this] {WriterProc(); });
+
 	status = recorderStaus::Recording;
 	return;
-
 }
 
 void MicRecorder::Start(HANDLE h_file) {
@@ -101,6 +205,7 @@ void MicRecorder::Start(HANDLE h_file) {
 	stop_close = false;
 	start(h_file);
 }
+
 void MicRecorder::Start(const std::wstring & FilePath)
 {
     std::unique_lock<std::mutex> lock(StausLock);
@@ -155,9 +260,10 @@ void MicRecorder::stop()
         throw std::runtime_error("recoder is not running");
     }
     stopping = true;
-    fileWriter.join();
 
     auto r = waveInStop(hwi);
+    Writer->WaitForExit();
+
     r = waveInUnprepareHeader(hwi, &SecondHDR, sizeof(WAVEHDR));
     r = waveInUnprepareHeader(hwi, &MainHDR, sizeof(WAVEHDR));
     r = waveInClose(hwi);
@@ -166,53 +272,6 @@ void MicRecorder::stop()
 		CloseHandle(m_hfile);
 	}
     stopping = false;
-}
-
-void MicRecorder::WriterProc()
-{
-    const int BufferSize = 1 << 20;
-    std::shared_ptr<char> buf(new char[BufferSize]);
-    DWORD bufferwritren = 0;
-    DWORD len_recorded = 0;
-
-    WorkerMessage message;
-    while (true)
-    {
-        {
-            std::unique_lock<std::mutex> lock(wokerqueuelock);
-            writer_condition.wait(lock, [this] {
-                return !singles.empty();
-            });
-            if (singles.empty()) { continue; }
-            message = *singles.begin();
-            singles.pop_front();
-        }
-        if (WokerSingle::Stop == message.single) {
-            WriteWavFile(buf.get(), bufferwritren);
-			WriteEnd(len_recorded);
-            singles.clear();
-            return;
-        } else if (WokerSingle::Open == message.single) {
-            WriteHead();
-        } else if(WokerSingle::Write == message.single){
-			len_recorded += message.dwLength;
-            if (bufferwritren + message.dwLength < BufferSize) {
-                memcpy(buf.get() + bufferwritren, message.buf.get(), message.dwLength);
-                bufferwritren += message.dwLength;
-            } else {
-                auto len_copy = BufferSize - bufferwritren;
-                memcpy(buf.get() + bufferwritren, message.buf.get(), len_copy);
-                WriteWavFile(buf.get(), BufferSize);
-                if (len_copy != message.dwLength) {
-                    bufferwritren = message.dwLength - len_copy;
-                    auto source = message.buf.get() + len_copy;
-                    memcpy(buf.get(), source, bufferwritren);
-                } else {
-                    bufferwritren = 0;
-                }
-            }
-        }
-    }
 }
 
 WAVEFORMATEX MicRecorder::wavformatInit(const WavFormat & format)
@@ -228,76 +287,33 @@ WAVEFORMATEX MicRecorder::wavformatInit(const WavFormat & format)
 	return wavformat;
 }
 
-void MicRecorder::WriteWavFile(void * buf, DWORD data_len)
-{
-    DWORD written = 0;
-    while (written < data_len)
-    {
-        DWORD _written;
-        if (!::WriteFile(m_hfile, buf, data_len, &_written, NULL)) {
-            break;
-        }
-        written += _written;
-    }
-}
-
-void MicRecorder::WriteHead()
-{
-	//init RIFF_HEADER
-	RIFF_HEADER m_riff = { 0 };;
-	memcpy(m_riff.szRiffID, "RIFF", 4);
-	memcpy(m_riff.szRiffFormat, "WAVE", 4);
-
-	//init FMT_BLOCK
-	FMT_BLOCK m_fmt = { 0 };
-	memcpy(m_fmt.szFmtID, "fmt ", 4);
-	m_fmt.dwFmtSize = sizeof(WAVE_FORMAT);
-	m_fmt.wavFormat = *(WAVE_FORMAT*)&wavformat;
-
-	//init Data
-	DATA_BLOCK m_data = { 0 };
-	memcpy(m_data.szDataID, "data", 4);
-
-	WriteWavFile(&m_riff, sizeof(RIFF_HEADER));
-	WriteWavFile(&m_fmt, sizeof(FMT_BLOCK));
-	WriteWavFile(&m_data, sizeof(DATA_BLOCK));
-}
-
-void MicRecorder::WriteEnd(DWORD TotalBytes)
-{
-	DWORD data = 4 + sizeof(FMT_BLOCK) + sizeof(DATA_BLOCK) + TotalBytes;
-	SetFilePointer(m_hfile, sizeof(char[4]), NULL, FILE_BEGIN);
-    WriteWavFile(&data,4);
-
-	SetFilePointer(m_hfile, sizeof(RIFF_HEADER) + sizeof(FMT_BLOCK) + sizeof(char[4]), NULL, FILE_BEGIN);
-    WriteWavFile(&TotalBytes, 4);
-}
-
 void MicRecorder::waveInProc(HWAVEIN hwi, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2)
 {
     auto self = (MicRecorder*)dwInstance;
-    
+    auto message = std::make_shared<WriterMessage>();
     if (self->stopping) {
-        WorkerMessage message{};
-        message.single = WokerSingle::Stop;
-        self->PostSingle(message);
+        message->single = WokerSingle::Stop;
+        self->Writer->Post_Message(message);
+        self->Writer->Exit();
+        return;
+
     } else if (WIM_OPEN == uMsg) {
-        WorkerMessage message{};
-        message.single = WokerSingle::Open;
-        self->PostSingle(message);
+
+        message->single = WokerSingle::Open;
+
     } else if (WIM_DATA == uMsg) {
         auto pWaveHeader = (WAVEHDR*)dwParam1;
         if (!pWaveHeader->dwBytesRecorded) {
             return;
         }
         
-        WorkerMessage message;
-        message.single = WokerSingle::Write;
-        message.dwLength = pWaveHeader->dwBytesRecorded;
-        message.buf.reset(new char[pWaveHeader->dwBytesRecorded]);
-        memcpy(message.buf.get(), pWaveHeader->lpData, pWaveHeader->dwBytesRecorded);
-        
+        message->single = WokerSingle::Write;
+        message->dwLength = pWaveHeader->dwBytesRecorded;
+        message->buf.reset(new char[pWaveHeader->dwBytesRecorded]);
+        memcpy(message->buf.get(), pWaveHeader->lpData, pWaveHeader->dwBytesRecorded);
         waveInAddBuffer(hwi, pWaveHeader, sizeof(WAVEHDR));
-        self->PostSingle(message);
+    } else {
+        return;
     }
+    self->Writer->Post_Message(message);
 }
