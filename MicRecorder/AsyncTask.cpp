@@ -50,14 +50,10 @@ void AsyncTask::WokerProc() {
 }
 
 bool AsyncTask::Post_Message(std::shared_ptr<AsyncMessage> message) {
-    Spin_lock l(status_lock);
-	if (RUNNING == status) {
-		std::unique_lock<std::mutex> lock(lock_queue);
-		queue.push_back(message);
-		condition.notify_all();
-		return true;
-	}
-	return false;
+	std::unique_lock<std::mutex> lock(lock_queue);
+	queue.push_back(message);
+	condition.notify_all();
+	return true;
 }
 
 bool AsyncTask::Exit() {
