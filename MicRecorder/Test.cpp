@@ -31,7 +31,7 @@ int main() {
 					std::cout << "input record file path" << std::endl;
 					std::wstring file;
 					std::wcin >> file;
-					r.Start(file);
+					r.StartByPath(file);
 				} else if ("stoprecord" == command) {
 					r.Stop();
 				} else if ("load" == command) {

@@ -49,7 +49,7 @@ public:
     MicRecorder(int DeviceIndex) : MicRecorder(WavFormat::Default(), DeviceIndex) {};
 	MicRecorder(const MicRecorder&) = delete;
     ~MicRecorder();
-    void Start(const std::wstring &FilePath);
+    void StartByPath(const std::wstring &FilePath);
 	void Start(HANDLE h_file);
     void Stop();
 public:
@@ -68,6 +68,7 @@ private:
     WAVEHDR SecondHDR;
     long WaveDataLen;
 	bool stop_close;
+	int BufferInQueue;
 
     std::shared_ptr<AsyncTask> Writer;
     std::atomic<bool> stopping;

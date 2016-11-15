@@ -117,7 +117,8 @@ MainHDR({0})                    ,
 SecondHDR({0})                  ,
 status(recorderStaus::Stoped)   ,
 WaveDataLen(0)                  ,
-stopping(false)
+stopping(false)					,
+BufferInQueue(0)
 {
     mainbuf = std::shared_ptr<char>(new char[BufferSize()]);
     seconebuf = std::shared_ptr<char>(new char[BufferSize()]);
@@ -206,7 +207,7 @@ void MicRecorder::Start(HANDLE h_file) {
 	start(h_file);
 }
 
-void MicRecorder::Start(const std::wstring & FilePath)
+void MicRecorder::StartByPath(const std::wstring & FilePath)
 {
     std::unique_lock<std::mutex> lock(StausLock);
     if (recorderStaus::Stoped != status) {
@@ -261,9 +262,9 @@ void MicRecorder::stop()
     }
     stopping = true;
 
-    auto r = waveInStop(hwi);
     Writer->WaitForExit();
 
+	auto r = waveInStop(hwi);
     r = waveInUnprepareHeader(hwi, &SecondHDR, sizeof(WAVEHDR));
     r = waveInUnprepareHeader(hwi, &MainHDR, sizeof(WAVEHDR));
     r = waveInClose(hwi);
@@ -292,13 +293,14 @@ void MicRecorder::waveInProc(HWAVEIN hwi, UINT uMsg, DWORD_PTR dwInstance, DWORD
     auto self = (MicRecorder*)dwInstance;
     auto message = std::make_shared<WriterMessage>();
     if (self->stopping) {
-        message->single = WokerSingle::Stop;
-        self->Writer->Post_Message(message);
-        self->Writer->Exit();
+		if (!(self->BufferInQueue -= 1)) {
+			message->single = WokerSingle::Stop;
+			self->Writer->Post_Message(message);
+			self->Writer->Exit();
+		}
         return;
-
     } else if (WIM_OPEN == uMsg) {
-
+		self->BufferInQueue = 2;
         message->single = WokerSingle::Open;
 
     } else if (WIM_DATA == uMsg) {
