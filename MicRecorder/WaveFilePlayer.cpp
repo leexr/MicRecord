@@ -16,6 +16,7 @@
 		#define TRACE  
 	#endif
 #endif
+#define FilePlayEnd WM_USER + 68
 
 WaveFilePlayer::WaveFilePlayer(HWND hwnd):
 m_hwnd(hwnd)  ,
@@ -167,6 +168,7 @@ bool WaveFilePlayer::Play()
 {
 	std::unique_lock<std::mutex>(lock_status);
 	if (status == PlayerStatus::Pause || status == PlayerStatus::LoadFile) {
+		FillMainBuf(m_format.nSamplesPerSec * 0.5 * m_format.wBitsPerSample / 8);
 		m_pDSBuffer8->Play(0, 0, DSBPLAY_LOOPING);
 		status = PlayerStatus::Playing;
 		return true;
@@ -211,6 +213,7 @@ bool WaveFilePlayer::Pause() {
 bool WaveFilePlayer::Stop() {
 	std::unique_lock<std::mutex>(lock_status);
 	if (status == PlayerStatus::Playing || status == PlayerStatus::Pause) {
+		m_pDSBuffer8->Restore();
 		m_pDSBuffer8->Stop();
 		pcm_offset = 0;
 		SetFilePointer(m_hfile, Data_Begin, 0, FILE_BEGIN);
@@ -222,10 +225,10 @@ bool WaveFilePlayer::Stop() {
 
 void WaveFilePlayer::detach_File() {
 	
+	waiting = false;
     for (auto &i : m_pDSPosNotify) {
         SetEvent(i.hEventNotify);
     }
-	waiting = false;
 
     BufferTransfer.join();
 	if (Detach_Close) {
@@ -303,6 +306,19 @@ void WaveFilePlayer::ParseWavformat() {
 	memcpy(&m_format, &m_fmt.wavFormat, sizeof(WAVEFORMATEX) - sizeof(WORD));
 }
 
+void WaveFilePlayer::ExitTransfer(int BufferSize) {
+	LPVOID buf = NULL;
+	DWORD  buf_len = 0;
+	m_pDSBuffer8->Lock(0, 0, &buf, &buf_len, NULL, NULL, DSBLOCK_ENTIREBUFFER);
+	memset(buf, 0, buf_len);
+	m_pDSBuffer8->Unlock(buf, buf_len, NULL, 0);
+	SetFilePointer(m_hfile, Data_Begin, 0, FILE_BEGIN);
+
+	Stop();
+
+	::PostMessageW(m_hwnd, FilePlayEnd, 0, 0);
+}
+
 void WaveFilePlayer::TransferProc(int BufferSize) {
     HANDLE m_events[WaveFilePlayerBufferCount];
 	for (auto i = 0; i != WaveFilePlayerBufferCount; ++i) {
@@ -317,7 +333,6 @@ void WaveFilePlayer::TransferProc(int BufferSize) {
 	LPVOID buf = NULL;
 	DWORD  buf_len = 0;
 	DWORD readed = 0;
-	bool shuoldstop = false;
 
 	while (waiting) {
 		auto res = WaitForMultipleObjects(WaveFilePlayerBufferCount, m_events, false, INFINITE);
@@ -325,24 +340,38 @@ void WaveFilePlayer::TransferProc(int BufferSize) {
 		buffer_offset = res == WAIT_OBJECT_0 ? BufferSize : 0;
 
 		if (FAILED(m_pDSBuffer8->Lock(buffer_offset, BufferSize, &buf, &buf_len, NULL, NULL, 0))) {
-			shuoldstop = true;
-		}
-		if (shuoldstop || !ReadFile(m_hfile, buf, buf_len, &readed, NULL)) {
-			shuoldstop = true;
-		}
-		if (shuoldstop || FAILED(m_pDSBuffer8->Unlock(buf, buf_len, NULL, 0))) {
-			shuoldstop = true;
-		}
-		
-		if (!shuoldstop) {
-			pcm_offset += buf_len;
-			shuoldstop = pcm_offset >= Data_length;
+			ExitTransfer(BufferSize);
+			continue;
 		}
 
-		if (shuoldstop) {
-			pcm_offset = 0;
-            Stop();
-			shuoldstop = false;
+		if (!ReadFile(m_hfile, buf, buf_len, &readed, NULL)) {
+			ExitTransfer(BufferSize);
+			continue;
 		}
+
+		if (readed < buf_len) {
+			ZeroMemory((char *)buf + readed, buf_len - readed);
+		}
+
+		if (FAILED(m_pDSBuffer8->Unlock(buf, buf_len, NULL, 0))) {
+			ExitTransfer(BufferSize);
+			continue;
+		}
+		pcm_offset += buf_len;
+
+		if (pcm_offset > Data_length || readed < buf_len) {
+			ExitTransfer(BufferSize);
+		}
+	}
+}
+
+void WaveFilePlayer::FillMainBuf(int BufferSize) {
+	LPVOID buf = NULL;
+	DWORD  buf_len = 0;
+	DWORD readed = 0;
+	for (int i = 0; i != WaveFilePlayerBufferCount; ++i) {
+		m_pDSBuffer8->Lock(i * BufferSize, BufferSize, &buf, &buf_len, NULL, NULL, 0);
+		ReadFile(m_hfile, buf, buf_len, &readed, NULL);
+		m_pDSBuffer8->Unlock(buf, buf_len, NULL, 0);
 	}
 }

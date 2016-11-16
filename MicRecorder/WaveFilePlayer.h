@@ -50,5 +50,7 @@ private:
 	void detach_File();
     void ParseWavformat();
     void TransferProc(int BufferSize);
+	void ExitTransfer(int BufferSize);
+	void FillMainBuf(int BufferSize);
 };
 
